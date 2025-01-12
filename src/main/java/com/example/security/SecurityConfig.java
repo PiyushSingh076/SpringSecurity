@@ -1,13 +1,18 @@
 package com.example.security;
 
+import com.example.security.jwt.AuthEntryPointJwt;
+import com.example.security.jwt.AuthTokenFilter;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.security.config.Customizer;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
-import org.springframework.security.config.annotation.web.configurers.AuthorizeHttpRequestsConfigurer;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.config.annotation.web.configurers.HeadersConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetails;
@@ -17,55 +22,86 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.provisioning.JdbcUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 import javax.sql.DataSource;
+
+import static org.springframework.security.config.Customizer.withDefaults;
 
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity
 public class SecurityConfig {
+
     @Autowired
-    DataSource dataSource; //creates a bean of DataSource
-    //Autowired injects Datasource dpenddencie in datasource
+    DataSource dataSource;
+
+    @Autowired
+    private AuthEntryPointJwt unauthorizedHandler;
+
     @Bean
-    //we are returning a filter chain hence func type is that and argument is of httpsecurity type (remember these two things)
+    public AuthTokenFilter authenticationJwtTokenFilter() {
+        return new AuthTokenFilter();
+    }
+
+    @Bean
     SecurityFilterChain defaultSecurityFilterChain(HttpSecurity http) throws Exception {
-        http.authorizeHttpRequests((requests) ->
-                ((AuthorizeHttpRequestsConfigurer.AuthorizedUrl) requests.requestMatchers("/h2-console/**").permitAll()
-                        .anyRequest()).authenticated()); //if this h2 requst appears allow everyon no login page neede
-        http.sessionManagement(session->
-                            session.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
-         //http.formLogin(Customizer.withDefaults());
-        //toenable the framse if u dont see h2
-        http.headers(headers->headers.frameOptions(frameOptions->frameOptions.sameOrigin()));
-        http.csrf(csrf-> csrf.disable());
-        http.httpBasic(Customizer.withDefaults());
+        http.authorizeHttpRequests(authorizeRequests ->
+                authorizeRequests.requestMatchers("/h2-console/**").permitAll()
+                        .requestMatchers("/signin").permitAll()
+                        .anyRequest().authenticated());
+        http.sessionManagement(
+                session ->
+                        session.sessionCreationPolicy(
+                                SessionCreationPolicy.STATELESS)
+        );
+        http.exceptionHandling(exception -> exception.authenticationEntryPoint(unauthorizedHandler));
+        //http.httpBasic(withDefaults());
+        http.headers(headers -> headers
+                .frameOptions(frameOptions -> frameOptions
+                        .sameOrigin()
+                )
+        );
+        http.csrf(csrf -> csrf.disable());
+        http.addFilterBefore(authenticationJwtTokenFilter(), //add the custom filter that u made
+                UsernamePasswordAuthenticationFilter.class);
 
-        return (SecurityFilterChain) http.build();
+
+        return http.build();
     }
-    //In memory authentication
+
     @Bean
-    //its predefine function --> UserDetailsService
-    public UserDetailsService userDetailsService() {
-        //theres a class UserDetails thats used to deign user details
-        UserDetails user1= User.withUsername("user1")
-                .password(passwordEncoder().encode("password1")) //noop-->to save password as plain text
-                .roles("USER")
-                .build(); //created a user here itself
-        UserDetails admin= User.withUsername("admin")
-                .password(passwordEncoder().encode("password2")) //noop-->to encode ur password
-                .roles("ADMIN")
-                .build();
-
-        JdbcUserDetailsManager userDetailsManager = new JdbcUserDetailsManager(dataSource);
-        userDetailsManager.createUser(user1);
-        userDetailsManager.createUser(admin);
-        return userDetailsManager;
-        //return new InMemoryUserDetailsManager(user1,admin); //it manages user details in memory
+    public UserDetailsService userDetailsService(DataSource dataSource) {
+        return new JdbcUserDetailsManager(dataSource);
     }
 
-    public PasswordEncoder passwordEncoder() {
+    @Bean
+    public CommandLineRunner initData(UserDetailsService userDetailsService) {
+        return args -> {
+            JdbcUserDetailsManager manager = (JdbcUserDetailsManager) userDetailsService;
+            UserDetails user1 = User.withUsername("user1")
+                    .password(passwordEncoder().encode("password1"))
+                    .roles("USER")
+                    .build();
+            UserDetails admin = User.withUsername("admin")
+                    //.password(passwordEncoder().encode("adminPass"))
+                    .password(passwordEncoder().encode("adminPass"))
+                    .roles("ADMIN")
+                    .build();
+
+            JdbcUserDetailsManager userDetailsManager = new JdbcUserDetailsManager(dataSource);
+            userDetailsManager.createUser(user1);
+            userDetailsManager.createUser(admin);
+        };
+    }
+
+    @Bean
+    public PasswordEncoder passwordEncoder(){
         return new BCryptPasswordEncoder();
     }
 
+    @Bean
+    public AuthenticationManager authenticationManager(AuthenticationConfiguration builder) throws Exception {
+        return builder.getAuthenticationManager();
+    }
 }
